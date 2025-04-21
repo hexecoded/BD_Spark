@@ -4,7 +4,7 @@
 ![Apache Spark](https://img.shields.io/badge/Apache%20Spark-FDEE21?style=for-the-badge&logo=apachespark&logoColor=black)   
 
 ## Descripción
-El objetivo de esta práctica es resolver un problema de aprendizaje automático con big data usando Spark. Para ello, usaremos un conjunto de datos basado en datos procedentes de listas de Spotify, donde podemos encontrar información variada acerca de canciones y sus metadatos: autor, año de salida, género, y variables numéricas asociadas a su bailabilidad, felicidad, y otros aspectos emocionales de la misma.
+El objetivo de esta práctica es resolver un problema de aprendizaje automático con big data usando Spark. Para ello, usaremos un conjunto de datos basado en datos procedentes de listas de Spotify, donde podemos encontrar información variada acerca de canciones y sus metadatos: autor, año de salida, género, y variables numéricas asociadas a su bailabilidad, felicidad, y otros aspectos emocionales de la misma. Proviene de la web de retos de Kaggle: [Dataset Spotify](https://www.kaggle.com/datasets/joebeachcapital/30000-spotify-songs)
 
 Se trata de un trabajo realizado de manera colaborativa en un grupo de 4 personas, donde estudiaremos diferentes alternativas distribuidas de paralelizar un algoritmo de clústering basado en densidad: DBScan.
 
