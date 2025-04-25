@@ -257,198 +257,138 @@ for FRAC in FRACS:
 
     # Eliminar la variable de 'scaled_features'
     pca_data = df.drop('scaled_features')
+    ###
+    from pyspark.sql.functions import col, floor, sqrt, collect_set
+    from pyspark.ml.functions import vector_to_array
+    from graphframes import GraphFrame
+    from itertools import combinations
 
-    # %% [markdown]
-    # # Hola - Esto deberíamos moverlo arriba para seguir con el esquema que se espera del notebook :)
-
-    # %% [markdown]
-    #     Contexto
-    #     Objetivos
-    #     Descripción detallada de la soluciones propuestas  <--- Poner aquí
-    #         Breve discusión de las decisiones clave que hacen que tu algoritmo sea escalable
-    #     Experimentos
-    #         Estudio breve de escalabilidad (scale-up, size-up, speedup)
-    #         Resultados acorde a métricas relevantes
-    #     Discusión de resultados
-    #     Resumen de la contribución de cada miembro del equipo
-
-    # %%
-
-    def __distance_from_pivot(pivot, dist, epsilon, operations):
+    def euclidean_distance_expr(vec1, vec2, dim):
         """
-        Genera una función que asigna un punto a una partición según su distancia al pivote.
+        Calcula la distancia euclidiana entre dos vectores en un espacio de dimensión dada.
 
-        :param pivot: Valor del pivote para calcular distancias.
-        :param dist: Función de distancia que toma dos valores y retorna una distancia numérica.
-        :param epsilon: Umbral de distancia para crear particiones.
-        :param operations: (Opcional) Objeto para contar operaciones de distancia, con método `add()`.
-        :return: Función que toma un objeto `x` y retorna una lista de tuplas con índice de partición y lista de `Row`s.
+        :param vec1: Lista o vector (tipo iterable) con coordenadas del primer punto.
+        :param vec2: Lista o vector (tipo iterable) con coordenadas del segundo punto.
+        :param dim: Entero que representa la cantidad de dimensiones a considerar para el cálculo.
+        :return: Valor flotante correspondiente a la distancia euclidiana entre los dos vectores.
         """
-        def distance(x):
-            pivot_dist = dist(x.value, pivot)
-            if operations is not None:
-                operations.add()
-            partition_index = math.floor(pivot_dist / epsilon)
-            rows = [Row(id=x.id, value=x.value,
-                        pivot_dist=dist(x.value, pivot))]
-            out = [(partition_index, rows),
-                   (partition_index + 1, rows)]
-            return out
-        return distance
+        return sqrt(sum([(vec1[i] - vec2[i]) ** 2 for i in range(dim)]))
 
-    def __scan(epsilon, dist, operations):
+    # Etiquetar núcleos y puntos base
+    def label_points(row, min_pts):
         """
-        Genera una función que identifica vecinos dentro de una partición que están a menos de `epsilon` de distancia.
-
-        :param epsilon: Distancia máxima para considerar dos puntos como vecinos.
-        :param dist: Función de distancia entre puntos.
-        :param operations: (Opcional) Objeto para contar operaciones de distancia.
-        :return: Función que toma una tupla con índice de partición y datos, y retorna lista de `Row`s con vecinos.
-        """
-
-        def scan(x):
-            # El diccionario de salida tiene un ID de punto como clave y un conjunto de IDs de los puntos a una distancia
-            # menor a epsilon. value contiene a los vecinos
-            out = {}
-            # El índice 0 es el índice de partición
-            # El índice 1 son los datos
-            partition_data = x[1]
-            partition_len = len(partition_data)
-            for i in range(partition_len):
-                for j in range(i + 1, partition_len):
-                    if operations is not None:
-                        operations.add()
-                    if dist(partition_data[i].value, partition_data[j].value) < epsilon:
-                        # Tanto i como j están a una distancia menor a epsilon
-                        if partition_data[i].id in out:
-                            out[partition_data[i].id].add(partition_data[j].id)
-                        else:
-                            out[partition_data[i].id] = set(
-                                [partition_data[j].id])
-                        if partition_data[j].id in out:
-                            out[partition_data[j].id].add(partition_data[i].id)
-                        else:
-                            out[partition_data[j].id] = set(
-                                [partition_data[i].id])
-            # Devuelve un punto y sus vecinos como tupla
-            return [Row(item[0], item[1]) for item in out.items()]
-
-        return scan
-
-    def __label(min_pts):
-        """
-        Genera una función que etiqueta puntos como núcleos si supera un número minimo de vecinos. Los puntos base son 
+        Función que etiqueta puntos como núcleos si supera un número minimo de vecinos. Los puntos base son 
         los vecinos de un punto núcleo
 
         :param min_pts: Número mínimo de puntos (incluyendo el mismo) para ser considerado punto núcleo.
         :return: Función que toma una tupla (id, vecinos) y retorna una lista de tuplas (id, [(etiqueta, es_núcleo)]).
         """
-        def label(x):
-            if len(x[1]) + 1 >= min_pts:
-                # Usar ID como etiqueta de cluster
-                cluster_label = x[0]
-                # Se devuelve True para los puntos núcleo
-                out = [(x[0], [(cluster_label, True)])]
-                for idx in x[1]:
-                    # Se devuelve False para los puntos base
-                    out.append((idx, [(cluster_label, False)]))
-                return out
+        id = row["src"]
+        neighbors = row["neighbors"]
+        if len(neighbors) + 1 >= min_pts:
+            out = [(id, (id, True))]
+            out.extend([(n, (id, False)) for n in neighbors])
+            return out
+        else:
             return []
 
-        return label
-
-    def __combine_labels(x):
+    # Combinar etiquetas por punto
+    def combine_labels(x):
         """
         Combina múltiples etiquetas de clúster para un punto y determina si es un punto núcleo.
 
         :param x: Tupla donde el primer elemento es el id del punto, y el segundo es una lista de (etiqueta, es_núcleo).
         :return: Tupla (id, etiquetas de clúster, es_núcleo) con todas las etiquetas si es núcleo, o solo una si no lo es.
         """
-        # El elemento 0 es el ID del punto
-        # El elemento 1 es una lista de tuplas con cluster y estiqueta de núcleo
-        point = x[0]
-        core_point = False
-        cluster_labels = x[1]
-        clusters = []
-        for (label, point_type) in cluster_labels:
-            if point_type is True:
-                core_point = True
-            clusters.append(label)
-        # Si es núcleo se mantienen todas las etiquetas de cluster, si no solo una
-        return point, clusters if core_point is True else [clusters[0]], core_point
+        point, tags = x
+        core = any(tag[1] for tag in tags)
+        clusters = [tag[0] for tag in tags]
+        return point, clusters if core else [clusters[0]], core
 
-    def process(spark, df, epsilon, min_pts, dist, dim, checkpoint_dir, operations=None):
+    def process_dataframe(spark, df, epsilon, min_pts, dim, checkpoint_dir):
         """
-        Process given dataframe with DBSCAN parameters
-        :param spark: spark session
-        :param df: input data frame where each row has id and value keys
-        :param epsilon: DBSCAN parameter for distance
-        :param min_pts: DBSCAN parameter for minimum points to define core point
-        :param dist: method to calculate distance. Only distance metric is supported.
-        :param dim: number of dimension of input data
-        :param checkpoint_dir: checkpoint path as required by Graphframe
-        :param operations: class for managing accumulator to calculate number of distance operations
-        :return: A dataframe of point id, cluster component and boolean indicator for core point
+        Procesa un dataframe de entrada con el algoritmo DBSCAN
+        :param spark: sesión de Spark
+        :param df: dataframe de entrada donde cada fila tiene un id y valores 
+        :param epsilon: parámetro de distancia de vecindad para DBSCAN
+        :param min_pts: parámetro de mínimo de vecinos para DBSCAN
+        :param dim: dimensiones de los datos de entrada
+        :param checkpoint_dir: directorio requerido por Graphframe para almacenar datos
+        :return: Un dataframe con el id de punto,su etiqueta de cluster y si es núcleo
         """
-        # Se elige el pivote aleatoriamente
-        zero = df.rdd.takeSample(False, 1)[0].value
+        # Convertimos el vector a array para poder acceder a los valores
+        df = df.withColumn("value_array", vector_to_array(col("value")))
 
-        # Se obtienen dos tuplas (partition_id, [point]) para cada punto en particiones contiguas
-        step1 = df.rdd.flatMap(__distance_from_pivot(
-            zero, dist, epsilon, operations))
+        # Seleccionamos un pivote aleatorio
+        pivot_vector = df.select("value_array").limit(1).collect()[0][0]
 
-        # Se obtienen tuplas (partition_id, [point, point, ...]) con los puntos de cada partición
-        step2 = step1.reduceByKey(lambda x, y: x + y)
+        # Calcular la distancia al pivote
+        dist_expr = sum([
+            (col("value_array")[i] - float(pivot_vector[i])) ** 2 for i in range(dim)
+        ])
+        # Calcular la
+        df = df.withColumn("pivot_dist", sqrt(dist_expr))
 
-        # Se obtienen tuplas (point_id, {point_id, point_id, ...}) con los IDs de vecinos de cada punto en una partición
-        step3 = step2.flatMap(__scan(epsilon, dist, operations))
+        # Asignación de la partición original
+        df_primary = df.withColumn("partition", floor(
+            col("pivot_dist") / epsilon).cast("int"))
 
-        # Se obtienen tuplas (point_id, {point_id, point_id, ...}) uniendo los vecinos de particiones distintas
-        step4 = step3.reduceByKey(lambda x, y: x.union(y))
+        # Replicar cada punto para asignarlo a la partición adyacente
+        df_adjacent = df.withColumn(
+            "partition", (floor(col("pivot_dist") / epsilon) + 1).cast("int"))
 
-        # Se obtienen tuplas (point_id, [(cluster_id, is_core)]) con una misma etiqueta de clúster
-        # para los puntos núcleo y vecinos de un núcleo y un booleano para identificar si es punto núcleo
-        step5 = step4.flatMap(__label(min_pts))
+        # Unir ambos DataFrames para que cada punto aparezca en ambas particiones
+        df = df_primary.union(df_adjacent)
 
-        # Se obtienen tuplas (point_id, [(cluster_id, is_core), ...]) con los etiquetados de cada punto
-        step6 = step5.reduceByKey(lambda x, y: x + y)
+        # Alias para join consigo mismo
+        df_a = df.alias("a")
+        df_b = df.alias("b")
 
-        # Se obtienen tuplas (point_id, [cluster_id, cluster_id, ...], is_core) manteniendo:
-        #     - Todas las etiquetas de clúster si es núcleo (al menos un is_core es True)
-        #     - Solo una etiqueta de cluster si no es núcleo
-        combine_cluster_rdd = step6.map(__combine_labels).cache()
-        # Se crea un RDD que selecciona la primera etiqueta de cluster para cada punto
+        # Join por partición y evitando duplicados (id_a < id_b)
+        df_pairs = df_a.join(df_b, (col("a.partition") == col(
+            "b.partition")) & (col("a.id") < col("b.id")))
 
-        id_cluster_rdd = combine_cluster_rdd.\
-            map(lambda x: Row(point=x[0],
-                cluster_label=x[1][0], core_point=x[2]))
-        try:
-            id_cluster_df = id_cluster_rdd.toDF()
-            # Se crean los vértices del grafo extrayendo las etiquetas de clúster de cada punto
-            vertices = combine_cluster_rdd.\
-                flatMap(lambda x: [Row(id=item)
-                        for item in x[1]]).toDF().distinct().cache()
-            # Se generan las aristas del grafo entre todos los pares de etiquetas del mismo punto
-            edges = combine_cluster_rdd. \
-                flatMap(lambda x: [Row(src=item[0], dst=item[1])
-                                   for item in combinations(x[1], 2)]). \
-                toDF().distinct().cache()
-            # Se establece el directorio de checkpoints, requisito para el procesamiento en GraphFrames
-            spark.sparkContext.setCheckpointDir(checkpoint_dir)
-            # Creación del grafo a partir de vértices y aristas
-            g = GraphFrame(vertices, edges)
-            # Se ejecuta el algoritmo de componentes conexas para consolidar las etiquetas de clúster
-            connected_df = g.connectedComponents()
+        # Calcular distancia
+        df_pairs = df_pairs.withColumn(
+            "distance",
+            euclidean_distance_expr(col("a.value_array"),
+                                    col("b.value_array"), dim)
+        )
+        # Filtrar vecinos
+        df_neighbors = df_pairs.filter(col("distance") < epsilon) \
+            .select(col("a.id").alias("src"), col("b.id").alias("dst"))
 
-            # Se une el DataFrame original (con la primera etiqueta asignada) con los resultados
-            # de componentes conexas, utilizando la etiqueta de clúster como llave.
-            # La unión permite asignar a cada punto su clúster final (campo 'component').
-            id_cluster_df = id_cluster_df.\
-                join(connected_df, connected_df.id == id_cluster_df.cluster_label). \
-                select("point", "component", "core_point")
-            return id_cluster_df
-        except ValueError:
-            return None
+        # Agrupar vecinos por punto
+        adjacency = df_neighbors.groupBy("src").agg(
+            collect_set("dst").alias("neighbors"))
+
+        # Etiquetar núcleos y puntos base
+        labeled_rdd = adjacency.rdd.flatMap(lambda x: label_points(x, min_pts))
+
+        # Combinar etiquetas
+        combined = labeled_rdd.groupByKey().mapValues(list).map(combine_labels).cache()
+
+        # Crear dataframe seleccionando una sola etiqueta de cluster
+        df_initial = combined.map(lambda x: (x[0], x[1][0], x[2])) \
+            .toDF(["point", "cluster_label", "core_point"])
+
+        # Crear vértices y aristas
+        vertices = combined.flatMap(
+            lambda x: [(cid,) for cid in x[1]]).distinct().toDF(["id"])
+        edges = combined.flatMap(lambda x: combinations(x[1], 2)) \
+            .map(lambda x: (x[0], x[1])) \
+            .distinct().toDF(["src", "dst"])
+
+        # Crear grafo
+        spark.sparkContext.setCheckpointDir(checkpoint_dir)
+        g = GraphFrame(vertices, edges)
+        components = g.connectedComponents()
+
+        result = df_initial.join(components, df_initial.cluster_label == components.id) \
+            .select("point", "component", "core_point")
+
+        return result
+    ###
 
     df_pca = pca_data.select("id", "pca_features")
     df_preproc = df_pca.sample(
@@ -467,8 +407,9 @@ for FRAC in FRACS:
 
     for i in range(REPS):
         start = time.perf_counter()
-        df_clusters = process(spark, df_preproc, EPSILON, MINPTS,
-                              distance.euclidean, DIMS, "checkpoint").cache()
+        df_clusters = process_dataframe(
+            spark, df_preproc, EPSILON, MINPTS, 14, "checkpoints")
+
         end = time.perf_counter()
 
         elapsed = (end - start)
