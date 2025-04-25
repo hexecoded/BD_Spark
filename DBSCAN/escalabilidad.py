@@ -15,6 +15,8 @@ def plot_scalability_global(name, stats, xlabel, x_vals, linear_vals, ax):
 
     if name == 'scale-up':
         ax.set_ylim([0, 1.1])
+        
+    plt.show()
 
 
 def main(argv):
@@ -27,11 +29,12 @@ def main(argv):
 
     num_cores = [1, 2, 4, 8, 12]
 
+    """
     for i in range(REPS):
         for j in num_cores:
             subprocess.run(["python", "code/scalability-DBSCAN.py",
                            str(j), str(1.0), f"speedup_global.csv"])
-
+    """
     results = pd.read_csv(
         f"speedup_global.csv",
         names=["cores", "percentage", "runtime"],
@@ -46,19 +49,19 @@ def main(argv):
     # ------------------------------------ Size-up ------------------------------------
 
     sizes = [0.1, 0.2, 0.4, 0.8, 1.0]
-
+    """
     for i in range(REPS):
         for fraction in sizes:
             subprocess.run(["python", "code/scalability-DBSCAN.py",
-                           str(j), "100", f"speedup_global.csv"])
-
+                           str(8), str(fraction) , f"sizeup_global.csv"])
+    """
     results = pd.read_csv(
         f'sizeup_global.csv',
         names=["cores", "percentage", "runtime"],
     )
     avg_results = results.groupby("percentage").mean()
     avg_results["size-up"] = avg_results["runtime"] / \
-        avg_results["runtime"][10]
+        avg_results["runtime"].loc[1.0]
 
     linear_sizeup = [1, 2, 4, 8, 10]
     plot_scalability_global('size-up', avg_results,
@@ -68,19 +71,19 @@ def main(argv):
 
     num_cores = [1, 2, 4, 8, 10]
     sizes = [0.1, 0.2, 0.4, 0.8, 1.0]
-
+    """
     for i in range(REPS):
         for j in range(len(num_cores)):
             subprocess.run(["python", "code/scalability-DBSCAN.py",
-                           str(j), "100", f"speedup_global.csv"])
-
+                           str(num_cores[j]), str(sizes[j]), f"scaleup_global.csv"])
+    """
     results = pd.read_csv(
         f'scaleup_global.csv',
         names=["cores", "percentage", "runtime"],
     )
     avg_results = results.groupby(["cores", "percentage"]).mean()
     avg_results["scale-up"] = avg_results["runtime"][(
-        1, 10)] / avg_results["runtime"]
+        1, 1.0)] / avg_results["runtime"]
 
     ideal_scaleup = [1]*5
     plot_scalability_global('scale-up', avg_results,
