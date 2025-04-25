@@ -6,7 +6,7 @@ import subprocess
 
 def plot_scalability_global(name, stats, xlabel, x_vals, linear_vals, ax):
 
-    ax.set_title(f"{name.capitalize()} of the Decision Tree of MLlib")
+    ax.set_title(f"{name.capitalize()} of the DBSCAN implementation")
     ax.plot(x_vals, stats[name], 'k', label=f"{name}")
     ax.plot(x_vals, linear_vals, '--', color='gray',
             label=f"Linear {name}", linewidth=1)
@@ -21,7 +21,7 @@ def main(argv):
 
     # Create the plot
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    fig.suptitle(f"Scalability of the Decision Trees implementation of MLlib")
+    fig.suptitle(f"Scalability of the DBSCAN (Grupo 4NN)")
     REPS = 5
     # ------------------------------------ Speed-up ------------------------------------
 
@@ -45,7 +45,7 @@ def main(argv):
 
     # ------------------------------------ Size-up ------------------------------------
 
-    sizes = [0.20, 0.40, 0.60, 0.80, 1.0]
+    sizes = [0.1, 0.2, 0.4, 0.8, 1.0]
 
     for i in range(REPS):
         for fraction in sizes:
@@ -67,7 +67,7 @@ def main(argv):
     # ------------------------------------ Scale-up ------------------------------------
 
     num_cores = [1, 2, 4, 8, 10]
-    sizes = [0.20, 0.40, 0.60, 0.80, 1.0]
+    sizes = [0.1, 0.2, 0.4, 0.8, 1.0]
 
     for i in range(REPS):
         for j in range(len(num_cores)):
