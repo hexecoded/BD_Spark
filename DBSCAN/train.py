@@ -257,7 +257,7 @@ for FRAC in FRACS:
 
     # Eliminar la variable de 'scaled_features'
     pca_data = df.drop('scaled_features')
-
+    ###
     from pyspark.sql.functions import col, floor, sqrt, collect_set
     from pyspark.ml.functions import vector_to_array
     from graphframes import GraphFrame
@@ -322,12 +322,23 @@ for FRAC in FRACS:
         # Seleccionamos un pivote aleatorio
         pivot_vector = df.select("value_array").limit(1).collect()[0][0]
 
-        # Calcular la distancia al pivote y asignar particiones
+        # Calcular la distancia al pivote
         dist_expr = sum([
             (col("value_array")[i] - float(pivot_vector[i])) ** 2 for i in range(dim)
         ])
-        df = df.withColumn("pivot_dist", sqrt(dist_expr)) \
-               .withColumn("partition", floor(col("pivot_dist") / epsilon).cast("int"))
+        # Calcular la
+        df = df.withColumn("pivot_dist", sqrt(dist_expr))
+
+        # Asignación de la partición original
+        df_primary = df.withColumn("partition", floor(
+            col("pivot_dist") / epsilon).cast("int"))
+
+        # Replicar cada punto para asignarlo a la partición adyacente
+        df_adjacent = df.withColumn(
+            "partition", (floor(col("pivot_dist") / epsilon) + 1).cast("int"))
+
+        # Unir ambos DataFrames para que cada punto aparezca en ambas particiones
+        df = df_primary.union(df_adjacent)
 
         # Alias para join consigo mismo
         df_a = df.alias("a")
@@ -374,9 +385,10 @@ for FRAC in FRACS:
         components = g.connectedComponents()
 
         result = df_initial.join(components, df_initial.cluster_label == components.id) \
-                           .select("point", "component", "core_point")
+            .select("point", "component", "core_point")
 
         return result
+    ###
 
     df_pca = pca_data.select("id", "pca_features")
     df_preproc = df_pca.sample(
